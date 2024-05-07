@@ -45,9 +45,49 @@ func (su *GormSuite) mockDB() (*gorm.DB, sqlmock.Sqlmock, error) {
 	return gormDB, mock, nil
 }
 
-func (su *GormSuite) TestTx() {
+func (su *GormSuite) TestTxSuccess() {
 	db, mock, err := su.mockDB()
 	su.Require().NoError(err)
+	su.Require().NotNil(db)
+	su.Require().NotNil(mock)
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO `models` (`value`,`id`) VALUES (?,?)").
+		WithArgs("Hello", 1).
+		WillReturnResult(sqlmock.NewResult(1, 0))
+	mock.ExpectCommit()
+
+	repo := Repository{db: db}
+	su.Require().NoError(
+		repo.Tx(su.ctx, func(txCtx context.Context) error {
+			return repo.getDB(txCtx).Debug().Model(&entity.Model{}).Create(entity.Model{ID: 1, Value: "Hello"}).Error
+		}),
+	)
+
+	su.NoError(
+		mock.ExpectationsWereMet(),
+	)
+
+	mock.ExpectQuery("SELECT * FROM `models` LIMIT ?").
+		WithArgs(1).
+		WillReturnRows(
+			sqlmock.NewRows([]string{"id", "value"}).
+				AddRow(1, "Hello"),
+		)
+
+	result := entity.Model{}
+	dbResult := repo.getDB(su.ctx).Debug().Model(&entity.Model{}).Take(&result)
+	su.NoError(dbResult.Error)
+
+	su.NoError(
+		mock.ExpectationsWereMet(),
+	)
+}
+
+func (su *GormSuite) TestTxFailed() {
+	db, mock, err := su.mockDB()
+	su.Require().NoError(err)
+	su.Require().NotNil(db)
+	su.Require().NotNil(mock)
 
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO `models` (`value`,`id`) VALUES (?,?)").
@@ -62,11 +102,11 @@ func (su *GormSuite) TestTx() {
 	repo := Repository{db: db}
 	su.Require().Error(
 		repo.Tx(su.ctx, func(txCtx context.Context) error {
-			if err := repo.DB(txCtx).Debug().Model(&entity.Model{}).Create(entity.Model{ID: 1, Value: "Hello"}).Error; err != nil {
+			if err := repo.getDB(txCtx).Debug().Model(&entity.Model{}).Create(entity.Model{ID: 1, Value: "Hello"}).Error; err != nil {
 				return err
 			}
 
-			return repo.DB(txCtx).Debug().Model(&entity.Model{}).Create(entity.Model{ID: 1, Value: "Hello"}).Error
+			return repo.getDB(txCtx).Debug().Model(&entity.Model{}).Create(entity.Model{ID: 1, Value: "Hello"}).Error
 		}),
 	)
 
@@ -80,7 +120,7 @@ func (su *GormSuite) TestTx() {
 
 	result := entity.Model{}
 	su.Error(
-		repo.DB(su.ctx).Debug().Model(&entity.Model{}).Take(&result).Error,
+		repo.getDB(su.ctx).Debug().Model(&entity.Model{}).Take(&result).Error,
 	)
 
 	su.NoError(
